@@ -724,8 +724,17 @@ class JobManager:
         return False
 
     def _docker_stop(self, job_id: str, label: str, name: str) -> bool:
+        """优雅停止：给足退出时间，避免 QQ 被 SIGKILL 打断写入。
+
+        为什么是 30 秒而不是 10 秒：
+        容器内 PID 1 是 supervisord，其 stopwaitsecs 用默认值 10 秒，超时后按
+        killasgroup=true 直接 SIGKILL 整个 QQ 进程组。QQ 有 20+ 个进程，且持有
+        大量 SQLite WAL/journal（Cookies、SharedStorage、settings.db 等），
+        被强杀可能留下损坏的 WAL 或锁文件，表现为登录态异常或设置回退
+        （此前退出码 137 即 128+9，正是 SIGKILL）。放宽到 30 秒可让其自然退出。
+        """
         self._step(job_id, label)
-        proc = docker(["stop", "--time", "10", name], timeout=90)
+        proc = docker(["stop", "--time", "30", name], timeout=110)
         if proc.returncode == 0:
             self._step(job_id, label, "done", "已停止")
             return True

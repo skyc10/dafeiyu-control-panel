@@ -18,9 +18,17 @@
 | 状态展示 | Docker daemon、两个容器、DSH 响应、桥接就绪、QQ 登录 |
 | 启动机器人 | 必要时拉起 Docker Desktop → 等 daemon → 启动 snowluma → 启动 fish-bot |
 | 停止 AI 服务 | 只停 fish-bot，保留 snowluma 与 QQ 进程 |
-| 关闭整套机器人 | 先 fish-bot 再 snowluma；提示下次可能需要重新扫码 |
+| 关闭整套机器人 | 先 fish-bot 再 snowluma；登录态保存在命名卷，重启自动登录（已实测） |
 
 只操作**已有容器**：不 build、不 pull、不 down、不删除容器或数据卷。容器缺失时只显示修复提示。
+
+### 停止采用 30 秒优雅超时
+
+`docker stop` 用 `--time 30`，给 QQ 留足退出时间。原因：容器内 PID 1 是 supervisord，其 `stopwaitsecs` 为默认 10 秒，超时后按 `killasgroup=true` 直接 SIGKILL 整个 QQ 进程组；QQ 有 20+ 进程且持有大量 SQLite WAL/journal，被强杀可能留下损坏的 WAL 或锁文件（此前出现过的退出码 137 即 128+9）。
+
+改用 30 秒后实测：两个容器退出码均为 **0**，`-wal` / `-shm` 文件在停止后归零（SQLite 完成 checkpoint 正常关闭），重启后自动登录无需扫码。
+
+**配置不会因 stop 丢失**：所有配置都在命名卷（`qq-client-config`、`qq-gateway-data`、`qq-client-data`、`fish-bot-dsh`）上，`docker stop` 只发信号、不碰卷。只有 `docker rm -v` 或 `volume rm` 才会删数据，面板没有这两个操作。
 
 ## 状态口径
 
