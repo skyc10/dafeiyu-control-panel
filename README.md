@@ -70,11 +70,14 @@
 management-panel/
 ├─ server.py          本机服务、状态探测、固定动作、任务管理
 ├─ static/            页面、样式、前端脚本
-├─ start.bat          双击启动
+├─ start.bat          双击启动（GBK 编码，见下）
 ├─ README.md
 ├─ docs/roadmap.md    性格 / 记忆 / 心情的后续设计备忘
 └─ runtime/           本地运行数据（Git 忽略）：会话密钥、面板日志
 ```
+
+> `start.bat` 必须保存为 **GBK/ANSI 编码**：cmd.exe 按系统代码页解析批处理，UTF-8 中文会让脚本解析错乱。
+> `.gitattributes` 已标记 `start.bat -text`，防止 Git 转换损坏。修改该文件时请保持编码。
 
 ## 后续规划
 
