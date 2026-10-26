@@ -1,33 +1,40 @@
 @echo off
-chcp 65001 >nul
 setlocal
 
-rem å¤§è‚¥é±¼ç®¡ç†é¢æ¿ Â· åŒå‡»å¯åŠ¨
-rem åªè´Ÿè´£æŠŠ Python æ‹‰èµ·æ¥ï¼›æ‰€æœ‰é€»è¾‘åœ¨ server.py å†…ã€‚
+rem ´ó·ÊÓã¹ÜÀíÃæ°å¡¤Ë«»÷Æô¶¯
+rem Ö»¸ºÔð°Ñ Python À­ÆðÀ´£¬ËùÓÐÂß¼­ÔÚ server.py Àï¡£
+rem ±¾ÎÄ¼þ±ØÐë±£´æÎª ANSI/GBK ±àÂë£ºcmd °´ÏµÍ³´úÂëÒ³½âÎöÅú´¦Àí¡£
 
-set "PYTHON=C:\Users\é™ˆ\AppData\Local\Programs\Python\Python312\python.exe"
+set "PYTHON=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
 set "PANEL=%~dp0server.py"
 
 if not exist "%PYTHON%" (
-  echo [é”™è¯¯] æœªæ‰¾åˆ° Python: %PYTHON%
-  echo        è¯·ç¡®è®¤å®‰è£…è·¯å¾„ï¼Œæˆ–ä¿®æ”¹ start.bat é‡Œçš„ PYTHON å˜é‡ã€‚
+  echo [´íÎó] Î´ÕÒµ½ Python ½âÊÍÆ÷¡£
+  echo        ÆÚÍûÎ»ÖÃ£º%%LOCALAPPDATA%%\Programs\Python\Python312\python.exe
+  echo        ÇëÈ·ÈÏ°²×°Â·¾¶£¬»òÐÞ¸Ä start.bat ÀïµÄ PYTHON ±äÁ¿¡£
   pause
   exit /b 1
 )
 
 if not exist "%PANEL%" (
-  echo [é”™è¯¯] æœªæ‰¾åˆ° server.pyï¼š%PANEL%
+  echo [´íÎó] Î´ÕÒµ½ server.py£º%PANEL%
   pause
   exit /b 1
 )
 
-echo æ­£åœ¨å¯åŠ¨å¤§è‚¥é±¼ç®¡ç†é¢æ¿...
-echo è®¿é—®åœ°å€ï¼šhttp://127.0.0.1:18100/
-echo å…³é—­æ­¤çª—å£å³å¯åœæ­¢é¢æ¿ï¼ˆæœºå™¨äººå®¹å™¨ä¸å—å½±å“ï¼‰ã€‚
+echo ÕýÔÚÆô¶¯´ó·ÊÓã¹ÜÀíÃæ°å...
+echo ·ÃÎÊµØÖ·£ºhttp://127.0.0.1:18100/
+echo ¹Ø±Õ´Ë´°¿Ú¼´¿ÉÍ£Ö¹Ãæ°å£¨»úÆ÷ÈËÈÝÆ÷²»ÊÜÓ°Ïì£©¡£
 echo.
 
 "%PYTHON%" "%PANEL%"
+set "RC=%ERRORLEVEL%"
 
 echo.
-echo é¢æ¿å·²é€€å‡ºã€‚
-pause
+if not "%RC%"=="0" (
+  echo Ãæ°åÒì³£ÍË³ö£¬´íÎóÂë %RC%¡£
+) else (
+  echo Ãæ°åÒÑÍË³ö¡£
+)
+rem °Ñ Python µÄÍË³öÂëÍ¸´«³öÈ¥£¬±ÜÃâ±» pause ¸²¸Ç
+endlocal & exit /b %RC%

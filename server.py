@@ -910,10 +910,11 @@ def resolve_console(console_id: str) -> tuple[str | None, str]:
 
 
 def main() -> int:
-    if os.name == "nt":
+    # 不强制改标准输出编码：Windows 控制台走 WriteConsoleW，中文本身正常；
+    # 强行转 UTF-8 反而会让 cmd 里出现乱码。
+    for stream in (sys.stdout, sys.stderr):
         try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+            stream.reconfigure(errors="replace")
         except Exception:
             pass
 
