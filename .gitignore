@@ -1,0 +1,21 @@
+# 本机运行数据，不进版本库
+runtime/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 编辑器 / 系统垃圾
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.log
+
+# 明确禁止入库的敏感物（防御性写法，防止误加）
+*.token
+*.env
+.env
+credentials*
+*.key
+secrets*
