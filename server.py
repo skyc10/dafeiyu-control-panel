@@ -72,6 +72,10 @@ PATH_SNOW_WEBUI_JSON = "/app/data/config/webui.json"
 SNOW_LOGIN_URL = f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/api/login"
 SNOW_SCRYPT = {"n": 16384, "r": 8, "p": 1, "dklen": 64}
 
+# noVNC 扫码页：密码是明文存放在 vnc-password（root 600），由容器入口生成/复用。
+# 它比 WebUI 密码简单——直接读出来交给前端即可。
+PATH_VNC_PASSWORD = "/app/data/config/vnc-password"
+
 COOKIE_NAME = "dafeiyu_panel"
 SESSION_SUBJECT = b"dafeiyu-control-panel-session-v1"
 
@@ -1009,14 +1013,38 @@ class PanelHandler(BaseHTTPRequestHandler):
         self._send(200, data, content_type)
 
 
+def novnc_url() -> tuple[str | None, str]:
+    """noVNC 扫码页：读取明文密码并用 URL fragment 自动填入。
+
+    为什么用 fragment（#）而不是 query（?）：
+      * fragment 不会随请求发到服务器，也不进 Referer，泄露面最小；
+      * noVNC 的 getConfigVar 优先读 hash、其次读 query，两种都支持。
+
+    密码由容器入口生成并持久化在 vnc-password（root 600），重启后复用同一个值，
+    因此这里直接读出来即可，不存在「猜密码」问题。
+    """
+    base = f"http://{HOST}:{PORT_NOVNC}/"
+    if not port_open(PORT_NOVNC):
+        return None, "noVNC 扫码页未响应（容器可能未运行）"
+
+    raw = read_container_text(CONTAINER_SNOWLUMA, PATH_VNC_PASSWORD)
+    if not raw or not raw.strip():
+        return base, "未读到远程桌面密码，请在弹窗中手动输入"
+
+    password = raw.strip()
+    if len(password) > 128 or any(ch.isspace() for ch in password):
+        return base, "远程桌面密码格式异常，请手动输入"
+
+    fragment = urllib.parse.urlencode({"password": password, "autoconnect": "1"})
+    return f"{base}#{fragment}", "已自动填入远程桌面密码"
+
+
 def resolve_console(console_id: str) -> tuple[str | None, str]:
     """即时读取令牌并返回可跳转地址；不缓存、不写日志。"""
     if console_id == "snowluma":
         return snowluma_login_url()
     if console_id == "novnc":
-        if not port_open(PORT_NOVNC):
-            return None, "noVNC 扫码页未响应（容器可能未运行）"
-        return f"http://{HOST}:{PORT_NOVNC}/", "用于 QQ 扫码登录"
+        return novnc_url()
     if console_id == "dsh":
         url, note = read_dsh_url()
         if not url:
