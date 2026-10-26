@@ -46,11 +46,11 @@
 SnowLuma WebUI 必须登录才能使用，密码以 `scrypt(N=16384, r=8, p=1)` 哈希存在 `config/webui.json`，无法反推。面板这样处理：
 
 1. 读取 `webui.json` 的 `passwordHash` / `passwordSalt`。
-2. 从容器 stdout 日志里取程序自己打印的初始密码（形如 `initial credentials: user=admin password=…`，只取最后一次，兼容重启后重新生成）。
+2. 从容器日志里取程序自己打印的初始密码（形如 `initial credentials: user=admin password=…`，只取最后一次，兼容重启后重新生成）。日志尾巴可能被 QQ 崩溃转储淹没，取不到时自动回退到全量扫描。
 3. **用同样的 scrypt 参数复算哈希**，与 `webui.json` 比对。只有一致才认为该密码仍然有效。
-4. 调 `POST /api/login` 换取会话令牌，拼成 `http://127.0.0.1:16082/?token=…`。
+4. 拼成 `http://127.0.0.1:16082/?token=<密码>`。
 
-WebUI 前端启动时若未登录会读取地址里的 `token` 参数完成登录，并立即把 token 从地址栏抹掉。
+**关键细节**：这个 `token` 参数名的值是**密码**，不是会话令牌。前端启动时若未登录，会取该参数并直接作为 `password` 调 `/api/login`（源码里是 `Zn()` → `se.login(n)` → `{password: n}`）。若把 `/api/login` 返回的会话令牌塞进去，前端会拿令牌当密码去登录并失败。
 
 若你已经在 SnowLuma 里改过密码，第 3 步会失败，面板会明确提示「当前密码未知」而不是拿旧密码反复尝试（登录接口有失败次数限制，反复试会被锁）。此时请手动登录 SnowLuma，面板入口仍会给出普通地址。
 

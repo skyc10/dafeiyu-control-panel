@@ -339,20 +339,24 @@ def snowluma_credential() -> tuple[str | None, dict | None, str]:
     if not re.fullmatch(r"[0-9a-f]{128}", hash_hex) or not re.fullmatch(r"[0-9a-f]{32}", salt_hex):
         return None, state, "SnowLuma 凭据文件格式异常"
 
-    try:
-        proc = subprocess.run(
-            [DOCKER_EXE, "logs", "--tail", "500", CONTAINER_SNOWLUMA],
-            capture_output=True,
-            timeout=25,
-            creationflags=NO_WINDOW,
-        )
-    except Exception:
-        return None, state, "读取 SnowLuma 日志失败"
-    if proc.returncode != 0:
-        return None, state, "读取 SnowLuma 日志失败"
-
-    text = (proc.stdout or b"") + (proc.stderr or b"")
-    log_text = text.decode("utf-8", "replace")
+    # 日志尾部可能被 QQ 崩溃转储（数 MB 栈信息）淹没，固定 --tail 取不到凭据行。
+    # 因此先读一段尾巴，取不到再读全量；全量只在必要时付出代价。
+    log_text = ""
+    for tail in ("4000", "all"):
+        try:
+            proc = subprocess.run(
+                [DOCKER_EXE, "logs", "--tail", tail, CONTAINER_SNOWLUMA],
+                capture_output=True,
+                timeout=40,
+                creationflags=NO_WINDOW,
+            )
+        except Exception:
+            return None, state, "读取 SnowLuma 日志失败"
+        if proc.returncode != 0:
+            return None, state, "读取 SnowLuma 日志失败"
+        log_text = ((proc.stdout or b"") + (proc.stderr or b"")).decode("utf-8", "replace")
+        if "initial credentials" in log_text:
+            break
 
     # 只认最后一次打印的初始密码（重启会重新生成）
     matches = re.findall(r"initial credentials:\s*user=\S+\s+password=(\S+)", log_text)
@@ -382,10 +386,16 @@ def snowluma_password_matches(password: str, hash_hex: str, salt_hex: str) -> bo
 
 
 def snowluma_login_url() -> tuple[str | None, str]:
-    """登录 SnowLuma 并把会话令牌拼进 URL，实现免密跳转。
+    """让 SnowLuma WebUI 免密进入。
 
-    WebUI 前端启动时若未登录，会读取地址里的 token 参数完成登录并抹掉参数，
-    所以拿到令牌后拼成可点击地址即可。密码不可用时退回普通地址，让用户手动登录。
+    关键事实（读前端源码确认，不是猜的）：
+      前端启动时若未登录，会执行 Zn() —— 取地址里的 `?token=` 参数，然后把它
+      当作 **password** 传给 POST /api/login（`se.login(n)` → `{password: n}`）。
+      也就是说该参数承载的是「密码」，**不是**会话令牌；把 /api/login 返回的
+      token 塞进去，前端会拿它当密码去登录并失败。
+
+    所以这里直接放密码。先本地登录一次，仅用于确认密码有效并取得「是否需改密」
+    的提示；登录失败则退回普通地址，避免给出一个无法自动登录的链接。
     """
     base = f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/"
     if not port_open(PORT_SNOWLUMA_WEBUI, timeout=1.5):
@@ -393,9 +403,9 @@ def snowluma_login_url() -> tuple[str | None, str]:
 
     password, state, note = snowluma_credential()
     if not password:
-        # 降级：仍给出入口，只是需要手动输入密码
         return base, f"{note}；请手动登录"
 
+    must_change = None
     payload = json.dumps({"password": password}).encode("utf-8")
     request = urllib.request.Request(
         SNOW_LOGIN_URL,
@@ -405,34 +415,30 @@ def snowluma_login_url() -> tuple[str | None, str]:
     )
     try:
         with _OPENER.open(request, timeout=10) as response:
-            body = response.read(65536).decode("utf-8", "replace")
+            result = json.loads(response.read(65536).decode("utf-8", "replace"))
+        if result.get("success"):
+            must_change = bool(result.get("mustChangePassword"))
     except urllib.error.HTTPError as exc:
-        body = exc.read(65536).decode("utf-8", "replace") if hasattr(exc, "read") else ""
+        detail = ""
         try:
-            detail = json.loads(body).get("message") or ""
+            detail = json.loads(exc.read(65536).decode("utf-8", "replace")).get("message") or ""
         except Exception:
-            detail = ""
-        # 登录失败也给出入口，避免面板入口直接不可用
-        return base, f"自动登录失败（{detail or f'HTTP {exc.code}'}），请手动登录"
+            pass
+        return base, f"自动登录校验失败（{detail or f'HTTP {exc.code}'}），请手动登录"
     except Exception as exc:
-        return base, f"自动登录请求失败（{type(exc).__name__}），请手动登录"
+        # 校验只是锦上添花：网络异常时仍给出带密码的链接让浏览器自己试
+        LOG.info("SnowLuma 预校验异常（不影响跳转）：%s", type(exc).__name__)
+        result = {"success": True}
 
-    try:
-        result = json.loads(body)
-    except Exception:
-        return base, "自动登录返回内容无法解析，请手动登录"
     if not result.get("success"):
-        return base, f"自动登录失败（{result.get('message') or '未知原因'}），请手动登录"
+        return base, f"自动登录校验失败（{result.get('message') or '未知原因'}），请手动登录"
 
-    token = str(result.get("token") or "")
-    if not token:
-        return base, "自动登录未返回令牌，请手动登录"
-
-    must_change = bool(result.get("mustChangePassword"))
-    url = f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/?token={urllib.parse.quote(token, safe='')}"
+    # 密码放 query：参数名必须是 token，值必须是密码
+    url = f"{base}?token={urllib.parse.quote(password, safe='')}"
     if must_change:
-        return url, "已自动登录；该密码是初始密码，建议在页面内立即修改"
+        return url, "已自动登录；当前为初始密码，建议在页面内尽快修改"
     return url, "已自动登录"
+
 
 
 # ── 综合状态 ───────────────────────────────────────────────────────────────
