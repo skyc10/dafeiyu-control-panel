@@ -239,6 +239,8 @@ async function openConsole(id, trigger) {
     } else {
       window.open(result.url, '_blank', 'noopener');
     }
+    // SnowLuma 初始密码未改时，提醒用户去页面里设置自己的密码
+    if (result.note) showConsoleNote(result.note);
   } catch (err) {
     if (placeholder && !placeholder.closed) placeholder.close();
     const hint = document.getElementById('aux-hint');
@@ -252,6 +254,14 @@ async function openConsole(id, trigger) {
   } finally {
     if (trigger) trigger.disabled = false;
   }
+}
+
+/** 在入口区显示一行提示（例如 SnowLuma 初始密码提醒）。 */
+function showConsoleNote(text) {
+  const hint = document.getElementById('aux-hint');
+  if (!hint) return;
+  hint.textContent = text;
+  hint.style.color = text.includes('修改') ? '#d29922' : '';
 }
 
 /* ── 最近操作 ───────────────────────────────────────────── */

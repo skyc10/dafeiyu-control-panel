@@ -66,6 +66,12 @@ PATH_DSH_URL = "/data/dsh-url.txt"
 PATH_BRIDGE_TOKEN = "/data/bridge-state/console-token"
 PATH_BRIDGE_CONFIG = "/data/bridge-config.json"
 
+# SnowLuma WebUI：密码以 scrypt 存储，无法反推；但初始密码会打印到容器 stdout，
+# 且可用 (密码 + 盐) 按同样参数复算哈希来证明它确实是当前有效密码。
+PATH_SNOW_WEBUI_JSON = "/app/data/config/webui.json"
+SNOW_LOGIN_URL = f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/api/login"
+SNOW_SCRYPT = {"n": 16384, "r": 8, "p": 1, "dklen": 64}
+
 COOKIE_NAME = "dafeiyu_panel"
 SESSION_SUBJECT = b"dafeiyu-control-panel-session-v1"
 
@@ -306,6 +312,123 @@ def bridge_snapshot() -> dict | None:
         return json.loads(probe.get("body") or "")
     except Exception:
         return None
+
+
+def snowluma_credential() -> tuple[str | None, dict | None, str]:
+    """取出 SnowLuma 当前可用的登录密码，返回 (密码, 凭据状态, 说明)。
+
+    WebUI 只存 scrypt 哈希，无法反推密码。初始密码由程序打印到容器 stdout，
+    形如 `initial credentials: user=admin password=xxx`。取到后按同样参数
+    复算 scrypt，只有与 webui.json 里的哈希一致才认为它仍然有效——这样就不会
+    在密码已被用户改过、或日志是上一轮遗留时，拿一个过期密码去猜。
+    """
+    raw = read_container_text(CONTAINER_SNOWLUMA, PATH_SNOW_WEBUI_JSON)
+    if not raw:
+        return None, None, "无法读取 SnowLuma 凭据文件（容器可能未运行）"
+    try:
+        state = json.loads(raw)
+    except Exception:
+        return None, None, "SnowLuma 凭据文件无法解析"
+
+    hash_hex = str(state.get("passwordHash") or "").lower()
+    salt_hex = str(state.get("passwordSalt") or "")
+    if not re.fullmatch(r"[0-9a-f]{128}", hash_hex) or not re.fullmatch(r"[0-9a-f]{32}", salt_hex):
+        return None, state, "SnowLuma 凭据文件格式异常"
+
+    try:
+        proc = subprocess.run(
+            [DOCKER_EXE, "logs", "--tail", "500", CONTAINER_SNOWLUMA],
+            capture_output=True,
+            timeout=25,
+            creationflags=NO_WINDOW,
+        )
+    except Exception:
+        return None, state, "读取 SnowLuma 日志失败"
+    if proc.returncode != 0:
+        return None, state, "读取 SnowLuma 日志失败"
+
+    text = (proc.stdout or b"") + (proc.stderr or b"")
+    log_text = text.decode("utf-8", "replace")
+
+    # 只认最后一次打印的初始密码（重启会重新生成）
+    matches = re.findall(r"initial credentials:\s*user=\S+\s+password=(\S+)", log_text)
+    if not matches:
+        return None, state, "日志中没有初始密码记录（可能已改过密码）"
+    password = matches[-1]
+
+    if not snowluma_password_matches(password, hash_hex, salt_hex):
+        return None, state, "日志中的初始密码已被修改，当前密码未知"
+    return password, state, "已用日志密码通过哈希校验"
+
+
+def snowluma_password_matches(password: str, hash_hex: str, salt_hex: str) -> bool:
+    try:
+        salt = bytes.fromhex(salt_hex)
+        got = hashlib.scrypt(
+            password.encode(),
+            salt=salt,
+            n=SNOW_SCRYPT["n"],
+            r=SNOW_SCRYPT["r"],
+            p=SNOW_SCRYPT["p"],
+            dklen=SNOW_SCRYPT["dklen"],
+        )
+        return hmac.compare_digest(got.hex(), hash_hex)
+    except Exception:
+        return False
+
+
+def snowluma_login_url() -> tuple[str | None, str]:
+    """登录 SnowLuma 并把会话令牌拼进 URL，实现免密跳转。
+
+    WebUI 前端启动时若未登录，会读取地址里的 token 参数完成登录并抹掉参数，
+    所以拿到令牌后拼成可点击地址即可。密码不可用时退回普通地址，让用户手动登录。
+    """
+    base = f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/"
+    if not port_open(PORT_SNOWLUMA_WEBUI, timeout=1.5):
+        return None, "SnowLuma WebUI 未响应（容器可能未运行）"
+
+    password, state, note = snowluma_credential()
+    if not password:
+        # 降级：仍给出入口，只是需要手动输入密码
+        return base, f"{note}；请手动登录"
+
+    payload = json.dumps({"password": password}).encode("utf-8")
+    request = urllib.request.Request(
+        SNOW_LOGIN_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _OPENER.open(request, timeout=10) as response:
+            body = response.read(65536).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        body = exc.read(65536).decode("utf-8", "replace") if hasattr(exc, "read") else ""
+        try:
+            detail = json.loads(body).get("message") or ""
+        except Exception:
+            detail = ""
+        # 登录失败也给出入口，避免面板入口直接不可用
+        return base, f"自动登录失败（{detail or f'HTTP {exc.code}'}），请手动登录"
+    except Exception as exc:
+        return base, f"自动登录请求失败（{type(exc).__name__}），请手动登录"
+
+    try:
+        result = json.loads(body)
+    except Exception:
+        return base, "自动登录返回内容无法解析，请手动登录"
+    if not result.get("success"):
+        return base, f"自动登录失败（{result.get('message') or '未知原因'}），请手动登录"
+
+    token = str(result.get("token") or "")
+    if not token:
+        return base, "自动登录未返回令牌，请手动登录"
+
+    must_change = bool(result.get("mustChangePassword"))
+    url = f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/?token={urllib.parse.quote(token, safe='')}"
+    if must_change:
+        return url, "已自动登录；该密码是初始密码，建议在页面内立即修改"
+    return url, "已自动登录"
 
 
 # ── 综合状态 ───────────────────────────────────────────────────────────────
@@ -889,9 +1012,7 @@ class PanelHandler(BaseHTTPRequestHandler):
 def resolve_console(console_id: str) -> tuple[str | None, str]:
     """即时读取令牌并返回可跳转地址；不缓存、不写日志。"""
     if console_id == "snowluma":
-        if not port_open(PORT_SNOWLUMA_WEBUI):
-            return None, "SnowLuma WebUI 未响应（容器可能未运行）"
-        return f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/", "SnowLuma 使用自身登录流程"
+        return snowluma_login_url()
     if console_id == "novnc":
         if not port_open(PORT_NOVNC):
             return None, "noVNC 扫码页未响应（容器可能未运行）"

@@ -36,8 +36,24 @@
 
 - DSH 地址：后端从 fish-bot 容器内 `/data/dsh-url.txt` 即时读取，并把容器内地址改写为宿主 `127.0.0.1:18080` 后返回。
 - 桥接令牌：优先 `/data/bridge-state/console-token`，不存在时读 `/data/bridge-config.json` 的 `consoleToken`。
+- SnowLuma：自动登录后把令牌拼进地址（详见下节）。
 - 令牌只经本机后端传递，不写日志、不进 localStorage、不缓存到前端。
 - DSH 每次重启后重新读取，因此重启后点一次即可拿到新地址。
+
+## SnowLuma 免密登录
+
+SnowLuma WebUI 必须登录才能使用，密码以 `scrypt(N=16384, r=8, p=1)` 哈希存在 `config/webui.json`，无法反推。面板这样处理：
+
+1. 读取 `webui.json` 的 `passwordHash` / `passwordSalt`。
+2. 从容器 stdout 日志里取程序自己打印的初始密码（形如 `initial credentials: user=admin password=…`，只取最后一次，兼容重启后重新生成）。
+3. **用同样的 scrypt 参数复算哈希**，与 `webui.json` 比对。只有一致才认为该密码仍然有效。
+4. 调 `POST /api/login` 换取会话令牌，拼成 `http://127.0.0.1:16082/?token=…`。
+
+WebUI 前端启动时若未登录会读取地址里的 `token` 参数完成登录，并立即把 token 从地址栏抹掉。
+
+若你已经在 SnowLuma 里改过密码，第 3 步会失败，面板会明确提示「当前密码未知」而不是拿旧密码反复尝试（登录接口有失败次数限制，反复试会被锁）。此时请手动登录 SnowLuma，面板入口仍会给出普通地址。
+
+> 初始密码每次重启都会重新生成，直到你在页面里改过一次为止。面板会在入口区提示是否需要改密。
 
 ## 安全边界
 
