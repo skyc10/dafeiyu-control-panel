@@ -63,6 +63,7 @@ CONSOLE_IDS = ("bridge", "dsh", "snowluma", "novnc")
 
 # 容器内令牌来源（只经后端读取）
 PATH_DSH_URL = "/data/dsh-url.txt"
+PATH_DSH_LOG = "/data/dsh.log"
 PATH_BRIDGE_TOKEN = "/data/bridge-state/console-token"
 PATH_BRIDGE_CONFIG = "/data/bridge-config.json"
 
@@ -266,11 +267,30 @@ def container_states() -> dict:
 
 # ── 令牌读取（即时、不缓存、不落前端） ──────────────────────────────────────
 def read_dsh_url() -> tuple[str | None, str]:
-    """返回 (宿主侧可用地址, 说明)。原文形如 http://<容器IP>:3080/?token=xxx。"""
+    """返回 (宿主侧可用地址, 说明)。
+
+    原文形如 http://<容器IP>:3080/?token=xxx。
+
+    优先读 /data/dsh-url.txt；该文件可能因启动时序竞争而是空的（旧版 entrypoint
+    在 DSH 打印地址之前就做了 grep），所以这里再兜底直接扫 dsh.log ——
+    日志里那行才是权威来源，且 DSH 每次重启都会重新生成 token。
+    """
     text = read_container_text(CONTAINER_FISH_BOT, PATH_DSH_URL)
-    if not text or not text.strip():
-        return None, "容器内 /data/dsh-url.txt 不存在或为空（DSH 可能还未启动完成）"
-    raw = text.strip().splitlines()[0].strip()
+    raw = ""
+    source = "dsh-url.txt"
+    if text and text.strip():
+        raw = text.strip().splitlines()[0].strip()
+    else:
+        log_text = read_container_text(CONTAINER_FISH_BOT, PATH_DSH_LOG)
+        if log_text:
+            matches = re.findall(r"http://[^\s]*token=[^\s]+", log_text)
+            if matches:
+                raw = matches[-1]          # 取最后一次：重启后以最新 token 为准
+                source = "dsh.log（回退）"
+
+    if not raw:
+        return None, "容器内未找到 DSH 访问地址（dsh-url.txt 为空且日志中无 token 行）"
+
     try:
         parts = urllib.parse.urlsplit(raw)
     except Exception:
@@ -279,7 +299,7 @@ def read_dsh_url() -> tuple[str | None, str]:
         return None, "DSH 地址中缺少令牌参数"
     # 容器内地址对宿主不可达：统一改写到宿主映射端口，保留路径与查询参数
     host_url = urllib.parse.urlunsplit(("http", f"{HOST}:{PORT_DSH}", parts.path or "/", parts.query, ""))
-    return host_url, "已按宿主映射端口改写"
+    return host_url, f"来源：{source}，已按宿主映射端口改写"
 
 
 def read_bridge_token() -> tuple[str | None, str]:
