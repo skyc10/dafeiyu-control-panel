@@ -1,0 +1,45 @@
+name: Bug 反馈
+description: 报告可复现的问题，帮助定位与修复
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "请先搜索已有 Issues。请勿提交 API Key、令牌、Cookie、真实 QQ 号、聊天/记忆数据库或完整运行配置；截图和日志先脱敏。"
+  - type: input
+    id: version
+    attributes:
+      label: 项目版本 / Release 标签 / 提交号
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: 操作系统、架构、Docker Desktop/Engine、Node/Python、DSH及关联插件版本（按适用项填写）。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 从哪个页面或命令开始？最小可复现步骤是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏日志 / 报错 / 截图
+      description: 保留错误类型、时间与堆栈，删除凭据、私人消息和账号标识。
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 已删除凭据、个人账号、聊天内容及记忆数据。
+          required: true

@@ -1,6 +1,6 @@
 # 大肥鱼管理面板
 
-当前版本：`1.1.0`。
+当前版本：`1.1.1`。
 
 本机网页面板：跳转各控制台、查看运行状态、执行固定启停动作。浅色主题。
 
@@ -164,3 +164,13 @@ node --test tests/frontend.test.cjs
 `python server.py --no-open` 可启动后端而不自动打开浏览器；原双击入口保持可用，start.bat 的 GBK 编码未变。
 
 陪伴记忆已登记在插件区“陪伴记忆管理”。点击后使用DSH认证打开独立管理页，目标地址无令牌；面板、DSH必须都使用127.0.0.1。插件业务开关由DSH配置管理。
+
+## 下载与问题反馈
+
+- [下载发布包](https://github.com/skyc10/dafeiyu-control-panel/releases)（查看对应版本的要求与已知限制）。
+- [提交 Bug](https://github.com/skyc10/dafeiyu-control-panel/issues/new/choose)：附版本、环境和复现步骤，日志与截图先脱敏。
+- [协作说明](CONTRIBUTING.md)。
+
+## 安装环境
+
+Windows，Python 3.10+（建议 3.12），Docker Desktop Linux 容器模式。解压下载包后双击 start.bat；无需 pip 依赖。优先从 PATH 识别 docker，支持默认安装目录和原自定义目录。自定义路径可通过 DAFEIYU_DOCKER_EXE 与 DAFEIYU_DESKTOP_EXE 环境变量设置。不含 Python 或 Docker 本体；先按部署项目建立容器。

@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -47,8 +48,18 @@ HOST = "127.0.0.1"
 PORT = 18100
 ORIGIN = f"http://{HOST}:{PORT}"
 
-DOCKER_EXE = r"D:\deepseek_flash\DockerDesktop\resources\bin\docker.exe"
-DESKTOP_EXE = r"D:\deepseek_flash\DockerDesktop\Docker Desktop.exe"
+def resolve_docker_paths():
+    """Discover local installations; explicit overrides also support custom installs."""
+    standard = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Docker" / "Docker"
+    legacy = Path(r"D:\deepseek_flash\DockerDesktop")
+    docker = os.environ.get("DAFEIYU_DOCKER_EXE") or shutil.which("docker")
+    if not docker:
+        docker = next((str(p) for p in [standard / "resources/bin/docker.exe", legacy / "resources/bin/docker.exe"] if p.is_file()), "docker")
+    desktop = os.environ.get("DAFEIYU_DESKTOP_EXE") or next((str(p) for p in [standard / "Docker Desktop.exe", legacy / "Docker Desktop.exe"] if p.is_file()), str(standard / "Docker Desktop.exe"))
+    return docker, desktop
+
+
+DOCKER_EXE, DESKTOP_EXE = resolve_docker_paths()
 
 CONTAINER_SNOWLUMA = "snowluma"
 CONTAINER_FISH_BOT = "fish-bot"
@@ -913,7 +924,7 @@ SECURITY_HEADERS = {
 
 
 class PanelHandler(BaseHTTPRequestHandler):
-    server_version = "DafeiyuPanel/1.1.0"
+    server_version = "DafeiyuPanel/1.1.1"
     sys_version = ""
     protocol_version = "HTTP/1.1"
 
