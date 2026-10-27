@@ -50,3 +50,12 @@ test('real status renderer separates DSH HTTP reachability from authenticated re
   assert.equal(node('st-dsh.status-detail').textContent,'鉴权与事件流正常');
   assert.equal(node('st-bridge').classList.values.has('ok'),true);
 });
+
+test('console polling preserves ready plugin badges', () => {
+  const {ctx} = context(async()=>{}, false);
+  const pluginBadge = {textContent:'可打开',getAttribute:()=>null,classList:{toggle(){}}};
+  ctx.document.querySelectorAll = selector => selector === '.card-state' ? [pluginBadge] : [];
+  ctx.fixture = {containers:{},services:{},qq:{},overall:{},consoles:{},plugins:[]};
+  vm.runInContext('renderStatus(fixture); renderStatus(fixture)',ctx);
+  assert.equal(pluginBadge.textContent,'可打开');
+});

@@ -9,18 +9,18 @@
     "container": "可选。声明所属容器名，容器未运行时卡片置灰；省略则只看端口",
     "tokenFile": "可选。容器内令牌文件路径，如 /data/plugins/foo-token",
     "tokenQuery": "可选。令牌的 query 参数名，默认 token",
-    "tokenHeader": "预留。若某插件要求请求头而非 query 参数，在此登记头名；当前版本仅记录不发送"
+    "tokenHeader": "预留。若某插件要求请求头而非 query 参数，在此登记头名；当前版本仅记录不发送",
+    "auth": "可选。dsh 使用专用DSH认证，后端换取HttpOnly会话后打开固定记忆管理页；不使用桥接token。"
   },
   "plugins": [
     {
-      "id": "example_plugin",
-      "name": "示例插件",
-      "desc": "接入说明见 docs/plugins.md，删除本项后重启面板即生效",
-      "port": 19090,
-      "path": "/",
-      "container": null,
-      "tokenFile": null,
-      "tokenQuery": "token"
+      "id": "companion_memory",
+      "name": "陪伴记忆管理",
+      "desc": "记忆、学习、试用、人格与备份管理",
+      "port": 18080,
+      "path": "/api/qq-companion-memory/v1/page",
+      "container": "fish-bot",
+      "auth": "dsh"
     }
   ]
 }

@@ -913,7 +913,7 @@ SECURITY_HEADERS = {
 
 
 class PanelHandler(BaseHTTPRequestHandler):
-    server_version = "DafeiyuPanel/1.0"
+    server_version = "DafeiyuPanel/1.1.0"
     sys_version = ""
     protocol_version = "HTTP/1.1"
 
@@ -1077,6 +1077,14 @@ class PanelHandler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/api/consoles/([a-z][a-z0-9_]{0,30})/open", path)
         if match:
             console_id = match.group(1)
+            plugin = PLUGINS.get(console_id)
+            if plugin and plugin.get("auth") == "dsh":
+                url, note, cookie = resolve_dsh_plugin(plugin)
+                if not url:
+                    self._json(409, {"error": note})
+                    return
+                self._json(200, {"id": console_id, "url": url, "note": note}, {"Set-Cookie": cookie})
+                return
             url, note = resolve_console(console_id)
             if not url:
                 self._json(409, {"error": note})
@@ -1197,6 +1205,7 @@ def load_plugins() -> dict:
             "container": item.get("container"),       # 由哪个容器提供
             "tokenQuery": str(item.get("tokenQuery") or "token")[:20],
             "tokenHeader": item.get("tokenHeader"),   # 若走请求头而非 query
+            "auth": item.get("auth"),
         }
     _PLUGINS_CACHE.update({"mtime": stat.st_mtime, "value": plugins})
     return plugins
@@ -1212,6 +1221,51 @@ def plugin_container_running(plugin: dict) -> bool:
         return True
     state = container_states().get(name)
     return bool(state and state.get("running"))
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def resolve_dsh_plugin(plugin: dict) -> tuple[str | None, str, str]:
+    """Exchange the current launch token server-side; never expose it in the target URL."""
+    path = plugin.get("path", "")
+    if (plugin.get("port") != PORT_DSH or plugin.get("container") != CONTAINER_FISH_BOT
+            or not re.fullmatch(r"/api/qq-companion-memory/v1/page(?:#[a-z0-9_/-]+)?", path)):
+        return None, "DSH 插件入口配置不合法", ""
+    if not plugin_container_running(plugin) or not port_open(PORT_DSH):
+        return None, "DSH 未运行，请先启动机器人", ""
+    launch, note = read_dsh_url()
+    if not launch:
+        return None, note, ""
+    # The target is fixed independently of the URL read from the container.
+    parts = urllib.parse.urlsplit(launch)
+    if parts.scheme != "http" or parts.netloc != f"{HOST}:{PORT_DSH}" or parts.path != "/":
+        return None, "DSH 登录地址不合法", ""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    response = None
+    try:
+        try:
+            response = opener.open(urllib.request.Request(launch, method="GET"), timeout=8)
+        except urllib.error.HTTPError as exc:
+            response = exc  # DSH mints its cookie on the expected 303 response.
+        cookie = response.headers.get("Set-Cookie", "")
+        jar = SimpleCookie()
+        jar.load(cookie)
+        if (response.code != 303 or len(jar) != 1
+                or not next(iter(jar), "").startswith("dsh-auth-")
+                or any(m["domain"] or m["path"] != "/" or not m["httponly"] for m in jar.values())):
+            return None, "DSH 登录失败，请等待宿主就绪后重试", ""
+        # Both services use the same loopback host. HttpOnly host cookies have no
+        # port scope; DSH still verifies the authority encoded in this cookie.
+        return f"http://{HOST}:{PORT_DSH}{path}", "已通过 DSH 认证，正在打开记忆管理", cookie
+    except Exception as exc:
+        LOG.info("DSH 插件登录失败：%s", type(exc).__name__)
+        return None, "无法建立 DSH 登录会话，请稍后重试", ""
+    finally:
+        if response is not None:
+            response.close()
 
 
 def resolve_plugin(plugin: dict) -> tuple[str | None, str]:

@@ -117,7 +117,7 @@ function renderStatus(data) {
   document.getElementById('connection-detail').textContent = bridge.errorLabel || (diagnostic.lastConnectedAt ? 'DSH 最近连接成功：' + new Date(diagnostic.lastConnectedAt).toLocaleString('zh-CN', { hour12: false }) : '等待桥接上报连接诊断');
 
   const consoles = data.consoles || {};
-  document.querySelectorAll('.card-state').forEach((node) => {
+  document.querySelectorAll('.card-state[data-state]').forEach((node) => {
     const key = node.getAttribute('data-state');
     const ready = Boolean(consoles[key]);
     node.textContent = ready ? '● 可打开' : '○ 当前不可用';

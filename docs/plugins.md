@@ -76,3 +76,7 @@
 - 只支持 GET 跳转，不代理请求，不做 iframe 嵌入。
 - 一个插件一个入口，不支持多页面嵌套。
 - `tokenHeader` 尚未生效：需要请求头的场景要等后续版本，或让插件自身支持 query 参数。
+
+## 陪伴记忆（DSH认证）
+
+登记`auth: "dsh"`、`container: "fish-bot"`、`port: 18080`和固定`/api/qq-companion-memory/v1/page`。后端即时读取DSH启动地址，在本机交换会话，将HttpOnly host cookie随面板响应设置后再打开管理页。令牌和cookie不进入JSON或日志，不使用桥接内部token。此模式仅允许该固定目标；未登录面板、跨站请求或未就绪宿主均拒绝。
