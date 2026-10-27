@@ -1,0 +1,21 @@
+{
+  "url": "https://github.com/skyc10/dafeiyu-control-panel/releases/tag/v1.1.0",
+  "tagName": "v1.1.0",
+  "isDraft": false,
+  "isPrerelease": false,
+  "sourceCommit": "969d6e75cf95a48b83738d86568fe51531664048",
+  "assets": [
+    {
+      "name": "dafeiyu-control-panel-1.1.0.zip",
+      "size": 49706,
+      "sha256": "35489b97911af1750b9f679eb0298b6564dad77506dd625f4b55cad73b9837d3",
+      "url": "https://github.com/skyc10/dafeiyu-control-panel/releases/download/v1.1.0/dafeiyu-control-panel-1.1.0.zip"
+    },
+    {
+      "name": "SHA256SUMS",
+      "size": 99,
+      "sha256": "91813e4764864da6660f27cbd6513637487275d4c28f94e888ce73e978e55aeb",
+      "url": "https://github.com/skyc10/dafeiyu-control-panel/releases/download/v1.1.0/SHA256SUMS"
+    }
+  ]
+}
