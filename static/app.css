@@ -460,3 +460,24 @@ footer {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* Connection overview; status first on desktop and narrow screens. */
+.overview { border-top: 3px solid var(--accent); }
+.overview-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.eyebrow { color: var(--muted); font-size: 12px; margin: 0 0 5px; }
+.overview h2 { font-size: 23px; margin: 0; }
+#overall-detail { color: var(--text-soft); margin: 10px 0 18px; }
+.connection-chain { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.connection-chain span { padding: 9px 18px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--bg); }
+.connection-chain span.connected { color: var(--ok); border-color: #bbdfc6; background: var(--ok-soft); }
+.connection-chain i { color: var(--muted); font-style: normal; }
+.overview.stale { border-top-color: var(--warn); background: var(--warn-soft); }
+.future > summary { cursor: pointer; color: var(--text-soft); padding: 10px 2px; }
+.future .block { margin-top: 12px; }
+@media (max-width: 560px) {
+  .connection-chain { gap: 6px; }
+  .connection-chain span { padding: 7px 9px; font-size: 12px; }
+  .overview h2 { font-size: 20px; }
+}
+
+@media (min-width: 800px) { .status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }

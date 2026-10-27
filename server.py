@@ -31,6 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -83,6 +84,8 @@ SESSION_SUBJECT = b"dafeiyu-control-panel-session-v1"
 DAEMON_WAIT_SECONDS = 180
 PROBE_CACHE_SECONDS = 1.2
 MAX_JOBS = 40
+SERVICE_WAIT_SECONDS = 120
+_PROBES = ThreadPoolExecutor(max_workers=6, thread_name_prefix="panel-probe")
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -226,42 +229,32 @@ EXIT_CODE_RE = re.compile(r"Exited \((\d+)\)")
 
 
 def container_states() -> dict:
-    """一次 docker ps 拿到所有容器状态；解析退出码，不额外 inspect。"""
-    result = {name: {"state": "missing", "running": False, "exitCode": None, "detail": "容器不存在"} for name in CONTAINERS}
-    daemon = docker_daemon()
-    if not daemon["available"]:
-        for name in CONTAINERS:
-            result[name] = {"state": "unknown", "running": False, "exitCode": None, "detail": "Docker 不可用"}
-        return result
+    """One inspect call returns real state, exit code and Docker health."""
+    result = {name: {"state": "missing", "running": False, "exitCode": None, "health": None, "detail": "容器不存在"} for name in CONTAINERS}
+    if not docker_daemon()["available"]:
+        return {name: {"state": "unknown", "running": False, "exitCode": None, "health": None, "detail": "Docker 不可用"} for name in CONTAINERS}
     try:
-        proc = docker(["ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Status}}"], timeout=20)
+        proc = docker(["inspect", *CONTAINERS], timeout=5)
+        records = json.loads(proc.stdout or "[]")
+        if not isinstance(records, list):
+            raise ValueError()
+        for record in records:
+            name = record.get("Name", "").lstrip("/")
+            if name not in result:
+                continue
+            state = record.get("State") or {}
+            running = state.get("Running") is True
+            health = (state.get("Health") or {}).get("Status") if running else None
+            detail = "运行中" if running else "已停止"
+            if health:
+                detail += " · 健康检查 " + {"healthy": "正常", "unhealthy": "异常", "starting": "启动中"}.get(health, health)
+            result[name] = {"state": state.get("Status", "unknown"), "running": running,
+                            "exitCode": state.get("ExitCode") if not running else None,
+                            "health": health, "detail": detail}
+        if proc.returncode and not records and 'No such' not in proc.stderr:
+            raise ValueError()
     except Exception as exc:
-        for name in CONTAINERS:
-            result[name] = {"state": "unknown", "running": False, "exitCode": None, "detail": f"查询失败：{type(exc).__name__}"}
-        return result
-    if proc.returncode != 0:
-        for name in CONTAINERS:
-            result[name] = {"state": "unknown", "running": False, "exitCode": None, "detail": redact(proc.stderr, 120) or "docker ps 失败"}
-        return result
-
-    seen = {}
-    for line in proc.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        seen[parts[0].strip()] = (parts[1].strip().lower(), parts[2].strip())
-
-    for name in CONTAINERS:
-        if name not in seen:
-            continue
-        state, status_text = seen[name]
-        match = EXIT_CODE_RE.search(status_text)
-        result[name] = {
-            "state": state,
-            "running": state == "running",
-            "exitCode": int(match.group(1)) if match else None,
-            "detail": redact(status_text, 120),
-        }
+        return {name: {"state": "unknown", "running": False, "exitCode": None, "health": None, "detail": "容器查询失败：" + type(exc).__name__} for name in CONTAINERS}
     return result
 
 
@@ -303,39 +296,51 @@ def read_dsh_url() -> tuple[str | None, str]:
 
 
 def read_bridge_token() -> tuple[str | None, str]:
-    """优先 state/console-token，其次 bridge-config.json 的 consoleToken。"""
-    token = read_container_text(CONTAINER_FISH_BOT, PATH_BRIDGE_TOKEN)
+    """Match upstream priority: explicit config token, then generated state token."""
+    raw = read_container_text(CONTAINER_FISH_BOT, PATH_BRIDGE_CONFIG, timeout=3)
+    try:
+        config = json.loads(raw or "{}")
+        token = str(config.get("consoleToken") or "").strip()
+        if token:
+            return token, "来源：bridge-config.json"
+    except (ValueError, AttributeError):
+        pass
+    token = read_container_text(CONTAINER_FISH_BOT, PATH_BRIDGE_TOKEN, timeout=3)
     if token and token.strip():
         return token.strip(), "来源：state/console-token"
-    raw = read_container_text(CONTAINER_FISH_BOT, PATH_BRIDGE_CONFIG)
-    if not raw:
-        return None, "容器内未找到桥接配置文件"
-    try:
-        config = json.loads(raw)
-    except Exception:
-        return None, "桥接配置文件无法解析"
-    token = str(config.get("consoleToken") or "").strip()
-    if not token:
-        return None, "桥接配置中 consoleToken 为空"
-    return token, "来源：bridge-config.json"
+    return None, "桥接控制台令牌不可用"
 
 
-def bridge_snapshot() -> dict | None:
-    """读取桥接 /api/status，用于判断上游连通与账号在线状态。"""
+def bridge_snapshot() -> dict:
     token, _ = read_bridge_token()
     if not token:
-        return None
-    probe = http_probe(
-        f"http://{HOST}:{PORT_BRIDGE}/api/status",
-        timeout=3.0,
-        headers={"x-console-token": token},
-    )
-    if not probe.get("reachable") or probe.get("status") != 200:
-        return None
+        return {"_reporting": False, "_probeError": "console_token_unavailable"}
+    probe = http_probe(f"http://{HOST}:{PORT_BRIDGE}/api/status", timeout=3,
+                       headers={"x-console-token": token})
+    status = probe.get("status")
+    if status != 200:
+        kind = "console_authentication_failed" if status == 401 else "console_host_rejected" if status == 403 else "console_unreachable"
+        return {"_reporting": False, "_probeError": kind, "_httpStatus": status}
     try:
-        return json.loads(probe.get("body") or "")
-    except Exception:
-        return None
+        value = json.loads(probe.get("body") or "")
+        if not isinstance(value, dict) or type(value.get("dshReady")) is not bool:
+            raise ValueError()
+        return {**value, "_reporting": True}
+    except (ValueError, TypeError):
+        return {"_reporting": False, "_probeError": "invalid_status_response"}
+
+
+ERROR_LABELS = {
+    "authentication_failed": "DSH 鉴权失败（HTTP 401）",
+    "host_rejected": "DSH 拒绝连接地址（HTTP 403）",
+    "event_stream_disconnected": "DSH 事件流断开，正在重连",
+    "unreachable": "DSH 服务不可达",
+    "console_token_unavailable": "无法读取桥接控制台令牌",
+    "console_authentication_failed": "桥接控制台鉴权失败",
+    "console_host_rejected": "桥接控制台拒绝请求地址",
+    "console_unreachable": "桥接控制台不可达",
+    "invalid_status_response": "桥接返回的状态格式异常",
+}
 
 
 def snowluma_credential() -> tuple[str | None, dict | None, str]:
@@ -470,13 +475,28 @@ def build_status() -> dict:
     daemon = docker_daemon()
     containers = container_states()
 
-    dsh_probe = http_probe(f"http://{HOST}:{PORT_DSH}/", timeout=2.5) if containers[CONTAINER_FISH_BOT]["running"] else {"reachable": False, "status": None}
-    bridge_probe = http_probe(f"http://{HOST}:{PORT_BRIDGE}/", timeout=2.5) if containers[CONTAINER_FISH_BOT]["running"] else {"reachable": False, "status": None}
-    webui_probe = http_probe(f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/", timeout=2.5) if containers[CONTAINER_SNOWLUMA]["running"] else {"reachable": False, "status": None}
-    novnc_ok = port_open(PORT_NOVNC) if containers[CONTAINER_SNOWLUMA]["running"] else False
-
-    bridge_data = bridge_snapshot() if bridge_probe.get("reachable") else None
-    qq = judge_qq(containers, bridge_data, novnc_ok)
+    fish_running = containers[CONTAINER_FISH_BOT]["running"]
+    snow_running = containers[CONTAINER_SNOWLUMA]["running"]
+    absent = {"reachable": False, "status": None}
+    tasks = {
+        "dsh": _PROBES.submit(http_probe, f"http://{HOST}:{PORT_DSH}/", 2.5) if fish_running else None,
+        "bridge": _PROBES.submit(http_probe, f"http://{HOST}:{PORT_BRIDGE}/", 2.5) if fish_running else None,
+        "snow": _PROBES.submit(http_probe, f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/", 2.5) if snow_running else None,
+        "novnc": _PROBES.submit(port_open, PORT_NOVNC) if snow_running else None,
+        "snapshot": _PROBES.submit(bridge_snapshot) if fish_running else None,
+    }
+    dsh_probe = tasks["dsh"].result() if tasks["dsh"] else absent
+    bridge_probe = tasks["bridge"].result() if tasks["bridge"] else absent
+    webui_probe = tasks["snow"].result() if tasks["snow"] else absent
+    novnc_ok = tasks["novnc"].result() if tasks["novnc"] else False
+    bridge_data = tasks["snapshot"].result() if tasks["snapshot"] else None
+    reporting = bool(bridge_data and bridge_data.get("_reporting", True))
+    diagnostics = (bridge_data.get("dsh") or {}) if reporting else {}
+    error_kind = diagnostics.get("errorKind") or (bridge_data or {}).get("_probeError")
+    qq = judge_qq(containers, bridge_data if reporting else None, novnc_ok)
+    ready = bool(reporting and bridge_data.get("dshReady") and diagnostics.get("eventStreamConnected") is not False)
+    overall_ready = bool(ready and qq["status"] == "online")
+    status_unknown = not daemon.get("available") or any(c["state"] == "unknown" for c in containers.values())
 
     consoles_ready = {
         "bridge": bool(containers[CONTAINER_FISH_BOT]["running"] and bridge_probe.get("reachable")),
@@ -488,6 +508,9 @@ def build_status() -> dict:
     return {
         "app": APP_TAG,
         "time": now_iso(),
+        "overall": {"state": "unknown" if status_unknown else "ready" if overall_ready else "degraded" if fish_running or snow_running else "stopped",
+                    "label": "状态未知" if status_unknown else "机器人已就绪" if overall_ready else "连接尚未就绪" if fish_running or snow_running else "机器人已停止",
+                    "detail": "Docker 或容器查询不可用，无法确认当前运行状态" if status_unknown else ERROR_LABELS.get(error_kind, "") or ("全部连接正常" if overall_ready else qq["detail"])},
         "docker": daemon,
         "containers": containers,
         "services": {
@@ -499,8 +522,12 @@ def build_status() -> dict:
             "bridge": {
                 "reachable": bool(bridge_probe.get("reachable")),
                 "httpStatus": bridge_probe.get("status"),
-                "reporting": bridge_data is not None,
-                "dshReady": bool(bridge_data.get("dshReady")) if bridge_data else None,
+                "reporting": reporting,
+                "ready": ready,
+                "errorKind": error_kind,
+                "errorLabel": ERROR_LABELS.get(error_kind, ""),
+                "diagnostics": diagnostics,
+                "dshReady": bool(bridge_data.get("dshReady")) if reporting else None,
                 "note": "" if bridge_probe.get("reachable") else "端口 13100 无响应",
             },
             "snowlumaWebui": {
@@ -532,7 +559,7 @@ def judge_qq(containers: dict, bridge_data: dict | None, novnc_ok: bool) -> dict
             return {
                 "status": "unknown",
                 "label": "未知",
-                "detail": "AI 服务未启动，无法读取账号状态；可到扫码页自行确认",
+                "detail": "桥接状态不可用，无法确认 QQ 登录；可打开扫码页检查",
             }
         return {"status": "unknown", "label": "未知", "detail": "AI 服务未启动，且扫码页不可达"}
 
@@ -552,9 +579,9 @@ def judge_qq(containers: dict, bridge_data: dict | None, novnc_ok: bool) -> dict
         }
     if connected is False:
         return {
-            "status": "waiting_scan",
-            "label": "等待扫码",
-            "detail": "桥接未连上 SnowLuma，可能尚未登录或 OneBot 未就绪",
+            "status": "upstream_disconnected",
+            "label": "上游未连接",
+            "detail": "请检查 OneBot 与 QQ 登录；不能仅凭连接失败判断需要扫码",
         }
     if not fish["running"]:
         return {"status": "unknown", "label": "未知", "detail": "AI 服务未启动，登录态无法确认"}
@@ -623,6 +650,7 @@ class JobManager:
             job = {
                 "id": secrets.token_hex(6),
                 "kind": kind,
+                "label": KIND_LABELS[kind],
                 "status": "queued",
                 "startedAt": now_iso(),
                 "finishedAt": None,
@@ -745,36 +773,62 @@ class JobManager:
         return False
 
     def _docker_stop(self, job_id: str, label: str, name: str) -> bool:
-        """优雅停止：给足退出时间，避免 QQ 被 SIGKILL 打断写入。
+        """Give supervised processes up to 35 seconds to stop; never delete volumes.
 
-        为什么是 30 秒而不是 10 秒：
-        容器内 PID 1 是 supervisord，其 stopwaitsecs 用默认值 10 秒，超时后按
-        killasgroup=true 直接 SIGKILL 整个 QQ 进程组。QQ 有 20+ 个进程，且持有
-        大量 SQLite WAL/journal（Cookies、SharedStorage、settings.db 等），
-        被强杀可能留下损坏的 WAL 或锁文件，表现为登录态异常或设置回退
-        （此前退出码 137 即 128+9，正是 SIGKILL）。放宽到 30 秒可让其自然退出。
+        Docker's timeout is an outer grace period. Internal supervisor timeouts
+        still follow the gateway image's own configuration.
         """
         self._step(job_id, label)
-        proc = docker(["stop", "--time", "30", name], timeout=110)
+        proc = docker(["stop", "--timeout", "35", name], timeout=110)
         if proc.returncode == 0:
             self._step(job_id, label, "done", "已停止")
             return True
         self._step(job_id, label, "failed", redact(proc.stderr) or "停止失败")
         return False
 
+    def _wait_ready(self, job_id: str, label: str, probe, timeout: int = SERVICE_WAIT_SECONDS) -> bool:
+        self._step(job_id, label)
+        deadline = time.monotonic() + timeout
+        detail = "等待服务响应"
+        while time.monotonic() < deadline:
+            ok, detail = probe()
+            if ok:
+                self._step(job_id, label, "done", detail)
+                return True
+            self._step(job_id, label, "running", detail)
+            time.sleep(2)
+        self._step(job_id, label, "failed", detail)
+        self._finish(job_id, "failed", f"{label}超时：{detail}；容器保留，可修复后重试")
+        return False
+
     def _action_start(self, job_id: str) -> None:
-        if not self._ensure_containers(job_id):
-            return
-        if not self._ensure_daemon(job_id):
+        if not self._ensure_daemon(job_id) or not self._ensure_containers(job_id):
             return
         if not self._docker_start(job_id, "启动 snowluma", CONTAINER_SNOWLUMA):
-            self._finish(job_id, "failed", "snowluma 启动失败，已停止后续步骤")
+            self._finish(job_id, "failed", "snowluma 启动失败")
             return
-        time.sleep(2)  # 给 QQ 接入端一点启动时间，再起 AI 服务
+        def gateway():
+            result = http_probe(f"http://{HOST}:{PORT_SNOWLUMA_WEBUI}/", timeout=2)
+            return result.get("reachable") and result.get("status", 500) < 500, "QQ 接入端管理服务已响应" if result.get("reachable") else "等待 SnowLuma 管理服务"
+        if not self._wait_ready(job_id, "等待 SnowLuma 服务", gateway):
+            return
         if not self._docker_start(job_id, "启动 fish-bot", CONTAINER_FISH_BOT):
-            self._finish(job_id, "failed", "fish-bot 启动失败；snowluma 保持运行，可重试或手动排查")
+            self._finish(job_id, "failed", "fish-bot 启动失败；snowluma 保持运行")
             return
-        self._step(job_id, "完成", "done", "容器已启动，服务就绪与扫码状态请看上方面板")
+        def ai():
+            value = bridge_snapshot()
+            diagnostic = value.get("dsh") or {}
+            ok = value.get("dshReady") is True and diagnostic.get("eventStreamConnected") is not False
+            kind = diagnostic.get("errorKind") or value.get("_probeError")
+            return ok, "DSH 鉴权与桥接连接正常" if ok else ERROR_LABELS.get(kind, "等待 DSH 鉴权与事件流")
+        if not self._wait_ready(job_id, "等待 AI 服务就绪", ai):
+            return
+        def qq_online():
+            value = bridge_snapshot().get("snowluma") or {}
+            return value.get("connected") is True and value.get("accountOnline") is True, "QQ 已在线" if value.get("accountOnline") else "等待 QQ 登录或 OneBot 连接，请打开扫码页检查"
+        if not self._wait_ready(job_id, "确认 QQ 在线", qq_online, timeout=60):
+            return
+        self._step(job_id, "完成", "done", "容器、DSH 连接与 QQ 在线状态均已验证")
         self._finish(job_id, "done")
 
     def _action_stop_ai(self, job_id: str) -> None:
@@ -1239,7 +1293,8 @@ def main() -> int:
     print("（首次进入需要使用带引导参数的链接，见下方）")
     print(f"引导链接：{ORIGIN}/?k={SESSION.secret}")
     LOG.info("面板启动，监听 %s:%s", HOST, PORT)
-    threading.Thread(target=lambda: webbrowser.open(f"{ORIGIN}/?k={SESSION.secret}"), daemon=True).start()
+    if "--no-open" not in sys.argv:
+        threading.Thread(target=lambda: webbrowser.open(f"{ORIGIN}/?k={SESSION.secret}"), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

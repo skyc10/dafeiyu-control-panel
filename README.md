@@ -23,28 +23,28 @@
 
 只操作**已有容器**：不 build、不 pull、不 down、不删除容器或数据卷。容器缺失时只显示修复提示。
 
-### 停止采用 30 秒优雅超时
+### 服务就绪与优雅停止
 
-`docker stop` 用 `--time 30`，给 QQ 留足退出时间。原因：容器内 PID 1 是 supervisord，其 `stopwaitsecs` 为默认 10 秒，超时后按 `killasgroup=true` 直接 SIGKILL 整个 QQ 进程组；QQ 有 20+ 进程且持有大量 SQLite WAL/journal，被强杀可能留下损坏的 WAL 或锁文件（此前出现过的退出码 137 即 128+9）。
+启动依次检查 Docker、已有容器、SnowLuma 服务、DSH 鉴权与事件流、QQ 在线。服务最多等待 120 秒，QQ 登录最多等待 60 秒；失败明确显示当前环节，保留容器供排查，不以固定两秒等待代表成功。
 
-改用 30 秒后实测：两个容器退出码均为 **0**，`-wal` / `-shm` 文件在停止后归零（SQLite 完成 checkpoint 正常关闭），重启后自动登录无需扫码。
-
-**配置不会因 stop 丢失**：所有配置都在命名卷（`qq-client-config`、`qq-gateway-data`、`qq-client-data`、`fish-bot-dsh`）上，`docker stop` 只发信号、不碰卷。只有 `docker rm -v` 或 `volume rm` 才会删数据，面板没有这两个操作。
+停止使用 35 秒 Docker 外层宽限；fish-bot 内部监督器转发信号并等待子进程。网关镜像内部的 supervisor 超时仍由镜像决定，不能用 Docker 外层超时替代。正常启停保留全部命名卷，但腾讯服务端可能要求重新登录；此时由用户在扫码页完成身份验证。
 
 ## 状态口径
 
-面板把三件事分开显示，不混为一谈：
+首页按连接总览、运行状态、启停操作、控制台和插件入口、最近操作排列；人格与记忆示例折叠在“后续规划”。
 
-1. **容器是否运行** — `docker ps` 的实际状态与退出码。
-2. **服务是否就绪** — DSH 18080、桥接 13100、SnowLuma 16082 的 HTTP 可达性。
-3. **QQ 是否在线** — 只取桥接 `/api/status` 运行时上报的 `snowluma.connected` 与 `accountOnline`。取不到时显示「未知」，**不会**用历史日志里的登录记录推断当前状态。
+- 容器状态来自一次 Docker inspect，包括真实退出码与运行时健康状态；Docker 不可用显示未知，不能当作已停止。
+- HTTP 可达不等于鉴权或 AI 就绪：管理页返回 401 仍可表示端口已响应；DSH 的实际鉴权和事件流取桥接上报。
+- 桥接未连 DSH、事件流断开、控制台鉴权失败、上游未连接分别展示，不能标成绿色“已就绪”。
+- QQ 在线只取运行时上报。桥接停机时显示未知，不根据历史登录记录猜测；OneBot 断开不直接等于需要扫码。
+- 查询失败将旧数据标记过期；前端请求有超时并避免重叠，后端合并同时到来的查询，各端口探测并行执行。
 
-因此「容器运行」不等于「QQ 已登录」：容器在跑但未扫码时，登录状态显示「等待扫码」或「未知」。
+`GET /api/status` 保留原字段，新增 `overall` 总览及 `services.bridge.ready/errorKind/errorLabel/diagnostics`。桥接诊断只包含预定义错误类别和成功/失败时间，不转发全局 activity、令牌或聊天内容。容器记录新增 `health`。
 
 ## 令牌处理
 
 - DSH 地址：后端从 fish-bot 容器内 `/data/dsh-url.txt` 即时读取，并把容器内地址改写为宿主 `127.0.0.1:18080` 后返回。
-- 桥接令牌：优先 `/data/bridge-state/console-token`，不存在时读 `/data/bridge-config.json` 的 `consoleToken`。
+- 桥接令牌：优先使用 `/data/bridge-config.json` 的显式 `consoleToken`，否则读取 `/data/bridge-state/console-token`，与上游优先级保持一致。
 - SnowLuma：自动登录后把令牌拼进地址（详见下节）。
 - noVNC 扫码页：读出明文密码后用 URL fragment 自动填入（详见下节）。
 - 令牌只经本机后端传递，不写日志、不进 localStorage、不缓存到前端。
@@ -149,3 +149,14 @@ management-panel/
 | `dafeiyu-control-panel` | 本机网页面板：状态探测、固定启停、控制台跳转 |
 
 运行期数据（配置、登录态、聊天与记忆）都在 Docker 命名卷里，两个仓库都不含这些内容。
+
+## 本次验收与回归
+
+```powershell
+python -m unittest discover -s tests -v
+node --test tests/frontend.test.cjs
+```
+
+2026-10-27 已完成 9 项后端、3 项前端回归，及浏览器中的真实“停止 AI 服务 → 启动机器人”流程。布局检查包括桌面与 390px 窄屏，状态、故障、任务进度和折叠规划区分别核对。完整部署验收和版本记录见 `docs/ACCEPTANCE-2026-10-27.md`。
+
+`python server.py --no-open` 可启动后端而不自动打开浏览器；原双击入口保持可用，start.bat 的 GBK 编码未变。

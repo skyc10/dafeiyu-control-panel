@@ -22,45 +22,14 @@
 </header>
 
 <main>
-  <!-- 控制台入口 -->
-  <section class="block">
-    <h2>控制台入口</h2>
-    <p class="hint">点击后在新标签页打开。令牌由后端即时读取，不会保存到浏览器。</p>
-    <div class="cards">
-      <button class="card console" data-console="bridge" type="button">
-        <span class="card-tag">桥接控制台</span>
-        <span class="card-port">127.0.0.1:13100</span>
-        <span class="card-desc">模式、白名单、角色、用量</span>
-        <span class="card-state" data-state="bridge">检测中…</span>
-      </button>
-      <button class="card console" data-console="dsh" type="button">
-        <span class="card-tag">专用 DSH</span>
-        <span class="card-port">127.0.0.1:18080</span>
-        <span class="card-desc">模型凭据与 AI 会话</span>
-        <span class="card-state" data-state="dsh">检测中…</span>
-      </button>
-      <button class="card console" data-console="snowluma" type="button">
-        <span class="card-tag">SnowLuma</span>
-        <span class="card-port">127.0.0.1:16082</span>
-        <span class="card-desc">QQ 接入端 WebUI</span>
-        <span class="card-state" data-state="snowluma">检测中…</span>
-      </button>
+  <section class="block overview" id="overview" aria-live="polite">
+    <div class="overview-top"><div><p class="eyebrow">连接总览</p><h2 id="overall-label">正在检查机器人</h2></div><span class="badge" id="overall-badge">检测中</span></div>
+    <p id="overall-detail">读取当前服务状态…</p>
+    <div class="connection-chain" aria-label="机器人连接链路">
+      <span id="chain-qq">QQ</span><i>↔</i><span id="chain-snow">SnowLuma</span><i>↔</i><span id="chain-bridge">qqbridge</span><i>↔</i><span id="chain-dsh">DSH</span>
     </div>
-    <div class="aux">
-      <button class="btn small" data-console="novnc" type="button">打开 QQ 扫码（noVNC 16081）</button>
-      <span class="hint" id="aux-hint">扫码页仅在容器运行时可用。</span>
-    </div>
+    <p class="hint" id="connection-detail">每层独立检查；控制台可访问与 AI 就绪分别显示。</p>
   </section>
-
-  <!-- 插件入口（由 plugins.json 驱动） -->
-  <section class="block" id="plugins-block">
-    <h2>插件入口</h2>
-    <p class="hint">在 <code>plugins.json</code> 里登记后出现在此，接入说明见 <code>docs/plugins.md</code>。</p>
-    <div class="cards" id="plugin-cards"></div>
-    <div class="plugins-empty" id="plugins-empty">尚未登记任何插件</div>
-    <p class="hint" id="plugin-hint" hidden></p>
-  </section>
-
   <!-- 状态 -->
   <section class="block">
     <h2>运行状态</h2>
@@ -112,8 +81,7 @@
       </button>
     </div>
     <p class="hint">
-      只操作已有容器：不 build、不 pull、不 down、不删除容器或数据卷。
-      「停止 AI 服务」保留 snowluma 与 QQ 进程。
+      「停止 AI 服务」保留 QQ 在线；「启动机器人」会等待连接就绪并显示进度。
     </p>
 
     <div class="job" id="job-panel" hidden>
@@ -126,6 +94,51 @@
     </div>
   </section>
 
+  <!-- 控制台入口 -->
+  <section class="block">
+    <h2>控制台入口</h2>
+    <p class="hint">点击后在新标签页打开。令牌由后端即时读取，不会保存到浏览器。</p>
+    <div class="cards">
+      <button class="card console" data-console="bridge" type="button">
+        <span class="card-tag">桥接控制台</span>
+        <span class="card-port">127.0.0.1:13100</span>
+        <span class="card-desc">模式、白名单、角色、用量</span>
+        <span class="card-state" data-state="bridge">检测中…</span>
+      </button>
+      <button class="card console" data-console="dsh" type="button">
+        <span class="card-tag">专用 DSH</span>
+        <span class="card-port">127.0.0.1:18080</span>
+        <span class="card-desc">模型凭据与 AI 会话</span>
+        <span class="card-state" data-state="dsh">检测中…</span>
+      </button>
+      <button class="card console" data-console="snowluma" type="button">
+        <span class="card-tag">SnowLuma</span>
+        <span class="card-port">127.0.0.1:16082</span>
+        <span class="card-desc">QQ 接入端 WebUI</span>
+        <span class="card-state" data-state="snowluma">检测中…</span>
+      </button>
+    </div>
+    <div class="aux">
+      <button class="btn small" data-console="novnc" type="button">打开 QQ 扫码（noVNC 16081）</button>
+      <span class="hint" id="aux-hint">扫码页仅在容器运行时可用。</span>
+    </div>
+  </section>
+
+  <!-- 插件入口（由 plugins.json 驱动） -->
+  <section class="block" id="plugins-block">
+    <h2>插件入口</h2>
+    <p class="hint">已接入的插件管理入口。</p>
+    <div class="cards" id="plugin-cards"></div>
+    <div class="plugins-empty" id="plugins-empty">尚未登记任何插件</div>
+    <p class="hint" id="plugin-hint" hidden></p>
+  </section>
+
+  <!-- 最近操作 -->
+  <section class="block">
+    <h2>最近操作</h2>
+    <p class="hint">仅显示脱敏后的步骤结果，不含令牌与聊天内容。</p>
+    <ul class="recent" id="recent-list"><li class="recent-empty">暂无操作记录</li></ul>
+  </section>  <details class="future"><summary>后续规划 · 人格与记忆</summary>
   <!-- 后续规划：性格 -->
   <section class="block planned">
     <div class="planned-head">
@@ -209,12 +222,8 @@
     </div>
   </section>
 
-  <!-- 最近操作 -->
-  <section class="block">
-    <h2>最近操作</h2>
-    <p class="hint">仅显示脱敏后的步骤结果，不含令牌与聊天内容。</p>
-    <ul class="recent" id="recent-list"><li class="recent-empty">暂无操作记录</li></ul>
-  </section>
+  </details>
+
 </main>
 
 <footer>

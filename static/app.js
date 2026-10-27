@@ -4,18 +4,21 @@
 let activeJobId = null;
 let pollTimer = null;
 let statusTimer = null;
+let statusPending = false;
+let lastStatus = null;
 
 const QQ_BADGE = {
   online: { cls: 'ok', text: '在线' },
   offline: { cls: 'bad', text: '已离线' },
   not_running: { cls: 'unknown', text: '未启动' },
   waiting_scan: { cls: 'warn', text: '等待扫码' },
+  upstream_disconnected: { cls: 'warn', text: '上游未连接' },
   unknown: { cls: 'unknown', text: '未知' },
 };
 
 /** 统一的 API 请求：POST 自动带防跨站标记头。 */
 async function api(path, options = {}) {
-  const init = { credentials: 'same-origin', headers: {} };
+  const init = { credentials: 'same-origin', headers: {}, signal: AbortSignal.timeout(15000) };
   if (options.method === 'POST') {
     init.method = 'POST';
     init.headers['Content-Type'] = 'application/json';
@@ -72,24 +75,24 @@ function renderStatus(data) {
 
   const services = data.services || {};
   const dsh = services.dsh || {};
+  const bridge = services.bridge || {};
   if (!containers['fish-bot'] || !containers['fish-bot'].running) {
     setItem('st-dsh', 'unknown', '未运行', 'AI 容器未启动，无法探测');
   } else if (dsh.reachable) {
-    setItem('st-dsh', 'ok', '已响应', `HTTP ${dsh.httpStatus}`);
+    setItem('st-dsh', bridge.ready ? 'ok' : 'warn', bridge.ready ? '已就绪' : '已响应', bridge.ready ? '鉴权与事件流正常' : bridge.errorLabel || '端口已响应，等待桥接确认连接');
   } else {
     setItem('st-dsh', 'warn', '无响应', dsh.note || '端口 18080 未响应');
   }
 
-  const bridge = services.bridge || {};
   if (!containers['fish-bot'] || !containers['fish-bot'].running) {
     setItem('st-bridge', 'unknown', '未运行', 'AI 容器未启动，无法探测');
   } else if (bridge.reachable) {
     const ready = bridge.dshReady;
     setItem(
       'st-bridge',
-      'ok',
-      '已就绪',
-      ready === true ? '控制台在线，DSH 已连接' : ready === false ? '控制台在线，DSH 未连接' : '控制台在线'
+      bridge.ready ? 'ok' : 'warn',
+      bridge.ready ? '已就绪' : bridge.reporting ? '连接异常' : '状态未知',
+      bridge.errorLabel || (ready === true ? 'DSH 已连接' : ready === false ? '控制台在线，DSH 未连接' : '控制台在线，未取得状态')
     );
   } else {
     setItem('st-bridge', 'warn', '无响应', bridge.note || '端口 13100 未响应');
@@ -98,6 +101,20 @@ function renderStatus(data) {
   const qq = data.qq || { status: 'unknown', detail: '' };
   const meta = QQ_BADGE[qq.status] || QQ_BADGE.unknown;
   setItem('st-qq', meta.cls, meta.text, qq.detail || '');
+
+  const overall = data.overall || {};
+  document.getElementById('overview').classList.remove('stale');
+  document.getElementById('overall-label').textContent = overall.label || '状态未知';
+  document.getElementById('overall-detail').textContent = overall.detail || '';
+  const badge = document.getElementById('overall-badge');
+  badge.textContent = overall.state === 'ready' ? '正常' : overall.state === 'stopped' ? '已停止' : '需要关注';
+  badge.className = 'badge ' + (overall.state === 'ready' ? 'done' : 'failed');
+  const chain = { qq: qq.status === 'online', snow: qq.status === 'online', bridge: bridge.reporting, dsh: bridge.ready };
+  for (const [id, good] of Object.entries(chain)) {
+    document.getElementById('chain-' + id).classList.toggle('connected', !!good);
+  }
+  const diagnostic = bridge.diagnostics || {};
+  document.getElementById('connection-detail').textContent = bridge.errorLabel || (diagnostic.lastConnectedAt ? 'DSH 最近连接成功：' + new Date(diagnostic.lastConnectedAt).toLocaleString('zh-CN', { hour12: false }) : '等待桥接上报连接诊断');
 
   const consoles = data.consoles || {};
   document.querySelectorAll('.card-state').forEach((node) => {
@@ -378,8 +395,11 @@ function renderRecent(items) {
 /* ── 刷新与初始化 ───────────────────────────────────────── */
 
 async function refreshStatus() {
+  if (statusPending) return;
+  statusPending = true;
   try {
     const data = await api('/api/status');
+    lastStatus = data;
     renderStatus(data);
     renderRecent(data.recent);
 
@@ -391,6 +411,15 @@ async function refreshStatus() {
     }
   } catch (err) {
     document.getElementById('last-update').textContent = `状态获取失败：${err.message}`;
+    document.getElementById('overview').classList.add('stale');
+    document.getElementById('overall-label').textContent = '状态已过期';
+    document.getElementById('overall-detail').textContent = lastStatus ? `最后成功更新：${lastStatus.time}；当前连接情况未知` : '尚未获取到有效状态';
+    document.getElementById('overall-badge').textContent = '查询失败';
+    document.getElementById('overall-badge').className = 'badge failed';
+    document.querySelectorAll('.connection-chain .connected').forEach(node => node.classList.remove('connected'));
+    document.querySelectorAll('.status-item').forEach(node => { node.classList.remove('ok'); node.classList.add('unknown'); });
+  } finally {
+    statusPending = false;
   }
 }
 
