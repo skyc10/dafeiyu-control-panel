@@ -109,6 +109,56 @@ function renderStatus(data) {
   });
 
   document.getElementById('last-update').textContent = `状态更新于 ${data.time || '—'}`;
+
+  renderPlugins(data.plugins || []);
+}
+
+/* ── 插件入口 ───────────────────────────────────────────── */
+
+/** 只在插件列表变化时重建卡片，避免每次轮询都打断点击。 */
+let lastPluginSig = '';
+
+function renderPlugins(plugins) {
+  const wrap = document.getElementById('plugin-cards');
+  const empty = document.getElementById('plugins-empty');
+  const sig = plugins.map((p) => `${p.id}:${p.ready}`).join('|');
+  if (!wrap || sig === lastPluginSig) return;
+  lastPluginSig = sig;
+
+  wrap.innerHTML = '';
+  empty.hidden = plugins.length > 0;
+
+  plugins.forEach((plugin) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'card';
+    button.dataset.pluginId = plugin.id;
+
+    const name = document.createElement('span');
+    name.className = 'card-tag';
+    name.textContent = plugin.name;
+
+    const port = document.createElement('span');
+    port.className = 'card-port';
+    port.textContent = `127.0.0.1:${plugin.port}`;
+
+    button.appendChild(name);
+    if (plugin.desc) {
+      const desc = document.createElement('span');
+      desc.className = 'card-desc';
+      desc.textContent = plugin.desc;
+      button.appendChild(desc);
+    }
+    button.appendChild(port);
+
+    const state = document.createElement('span');
+    state.className = 'card-state ' + (plugin.ready ? 'ok' : 'off');
+    state.textContent = plugin.ready ? '可打开' : '当前不可用';
+    button.appendChild(state);
+
+    button.addEventListener('click', () => openConsole(plugin.id, button));
+    wrap.appendChild(button);
+  });
 }
 
 /* ── 任务进度 ───────────────────────────────────────────── */
@@ -239,15 +289,24 @@ async function openConsole(id, trigger) {
     } else {
       window.open(result.url, '_blank', 'noopener');
     }
-    // SnowLuma 初始密码未改时，提醒用户去页面里设置自己的密码
-    if (result.note) showConsoleNote(result.note);
+    // 提示分流：插件显示在插件区，其余走控制台入口区
+    if (trigger && trigger.dataset && trigger.dataset.pluginId) {
+      showPluginNote(result.note || '', false);
+    } else if (result.note) {
+      showConsoleNote(result.note);
+    }
   } catch (err) {
     if (placeholder && !placeholder.closed) placeholder.close();
-    const hint = document.getElementById('aux-hint');
     const message = `无法打开：${err.message}`;
-    if (id === 'novnc' && hint) {
-      hint.textContent = message;
-      hint.style.color = '#f85149';
+    // 插件入口的失败信息显示在插件区内，避免串到扫码提示上
+    if (document.querySelector(`#plugin-cards button[data-plugin-id="${id}"]`)) {
+      showPluginNote(message, true);
+    } else if (id === 'novnc') {
+      const hint = document.getElementById('aux-hint');
+      if (hint) {
+        hint.textContent = message;
+        hint.style.color = '#dc2626';
+      }
     } else {
       window.alert(message);
     }
@@ -261,7 +320,16 @@ function showConsoleNote(text) {
   const hint = document.getElementById('aux-hint');
   if (!hint) return;
   hint.textContent = text;
-  hint.style.color = text.includes('修改') ? '#d29922' : '';
+  hint.style.color = text.includes('修改') ? '#b45309' : '';
+}
+
+/** 插件区的状态提示。 */
+function showPluginNote(text, isError) {
+  const hint = document.getElementById('plugin-hint');
+  if (!hint) return;
+  hint.hidden = false;
+  hint.textContent = text;
+  hint.style.color = isError ? '#dc2626' : '';
 }
 
 /* ── 最近操作 ───────────────────────────────────────────── */

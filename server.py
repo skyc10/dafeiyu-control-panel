@@ -491,6 +491,7 @@ def build_status() -> dict:
         },
         "qq": qq,
         "consoles": consoles_ready,
+        "plugins": plugins_status(),
         "jobs": JOBS.running_summary(),
         "recent": JOBS.recent_summary(),
     }
@@ -999,7 +1000,7 @@ class PanelHandler(BaseHTTPRequestHandler):
             self._json(202, {"job": job, "reused": not created})
             return
 
-        match = re.fullmatch(r"/api/consoles/([a-z]+)/open", path)
+        match = re.fullmatch(r"/api/consoles/([a-z][a-z0-9_]{0,30})/open", path)
         if match:
             console_id = match.group(1)
             url, note = resolve_console(console_id)
@@ -1070,7 +1071,119 @@ def resolve_console(console_id: str) -> tuple[str | None, str]:
         if not token:
             return None, note
         return f"http://{HOST}:{PORT_BRIDGE}/?token={urllib.parse.quote(token, safe='')}", note
+    # 外部插件：只允许注册表里登记过的 id，不接受任意 URL
+    plugin = PLUGINS.get(console_id)
+    if plugin:
+        return resolve_plugin(plugin)
     return None, "未知入口"
+
+
+# ── 外部插件接入 ───────────────────────────────────────────────────────────
+# 设计要点：
+#   * 只展示配置里显式登记的插件，端口/主机固定为 127.0.0.1，不接受任意域名跳转。
+#   * 配置文件 plugins.json 放在仓库里（可入库），令牌等机密一律不写进去；
+#     需要凭据的插件通过 tokenFile 指向容器内文件，由后端即时读取。
+#   * 新增插件只改配置，不改代码。
+PLUGINS_FILE = PANEL_DIR / "plugins.json"
+_PLUGINS_CACHE = {"mtime": None, "value": {}}
+
+
+def load_plugins() -> dict:
+    """读取插件注册表；文件缺失或格式错误时返回空表，不影响主面板。"""
+    try:
+        stat = PLUGINS_FILE.stat()
+    except OSError:
+        return {}
+    if _PLUGINS_CACHE["mtime"] == stat.st_mtime:
+        return _PLUGINS_CACHE["value"]
+
+    plugins: dict[str, dict] = {}
+    try:
+        raw = json.loads(PLUGINS_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        LOG.warning("plugins.json 解析失败：%s", type(exc).__name__)
+        return {}
+
+    for item in (raw.get("plugins") or []):
+        if not isinstance(item, dict):
+            continue
+        pid = str(item.get("id") or "").strip()
+        port = item.get("port")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{1,30}", pid):
+            continue
+        if not isinstance(port, int) or not (1 <= port <= 65535):
+            continue
+        plugins[pid] = {
+            "id": pid,
+            "name": str(item.get("name") or pid)[:40],
+            "desc": str(item.get("desc") or "")[:80],
+            "port": port,
+            "path": str(item.get("path") or "/")[:120],
+            "tokenFile": item.get("tokenFile"),      # 容器内路径或 null
+            "container": item.get("container"),       # 由哪个容器提供
+            "tokenQuery": str(item.get("tokenQuery") or "token")[:20],
+            "tokenHeader": item.get("tokenHeader"),   # 若走请求头而非 query
+        }
+    _PLUGINS_CACHE.update({"mtime": stat.st_mtime, "value": plugins})
+    return plugins
+
+
+PLUGINS = load_plugins()
+
+
+def plugin_container_running(plugin: dict) -> bool:
+    """插件声明了容器就要求该容器运行；没声明则只看端口。"""
+    name = plugin.get("container")
+    if not name:
+        return True
+    state = container_states().get(name)
+    return bool(state and state.get("running"))
+
+
+def resolve_plugin(plugin: dict) -> tuple[str | None, str]:
+    port = plugin["port"]
+    path = plugin["path"] if plugin["path"].startswith("/") else "/" + plugin["path"]
+    base = f"http://{HOST}:{port}{path}"
+
+    if not plugin_container_running(plugin):
+        return None, f"{plugin['name']} 的容器未运行"
+
+    if not port_open(port):
+        return base, "端口未监听，页面可能需要先启动该服务"
+
+    token_file = plugin.get("tokenFile")
+    if not token_file:
+        return base, "无需令牌"
+
+    container = plugin.get("container")
+    if not container:
+        return base, "未声明容器，无法读取令牌"
+
+    token = read_container_text(container, str(token_file))
+    if not token or not token.strip():
+        return base, "未读到令牌，请手动登录"
+
+    token = token.strip().splitlines()[0].strip()
+    if len(token) > 256:
+        return base, "令牌格式异常，请手动登录"
+
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}{plugin['tokenQuery']}={urllib.parse.quote(token, safe='')}", "已自动附加令牌"
+
+
+def plugins_status() -> list[dict]:
+    """给前端用的插件清单与可用性（不含任何凭据）。"""
+    items = []
+    for pid, plugin in PLUGINS.items():
+        ready = bool(port_open(plugin["port"], timeout=0.6)) and plugin_container_running(plugin)
+        items.append({
+            "id": pid,
+            "name": plugin["name"],
+            "desc": plugin["desc"],
+            "port": plugin["port"],
+            "ready": ready,
+        })
+    return items
 
 
 def main() -> int:

@@ -1,0 +1,26 @@
+{
+  "_comment": "外部插件 WebUI 接入登记表。只允许登记 127.0.0.1 上的服务；令牌一律不写在这里，用 tokenFile 指向容器内文件由后端即时读取。",
+  "_fields": {
+    "id": "唯一标识，小写字母开头，可含数字和下划线（同时是 /api/consoles/<id>/open 的路径参数）",
+    "name": "卡片标题",
+    "desc": "一句话说明",
+    "port": "宿主端口（整数）。面板只连 127.0.0.1，不接受外部域名",
+    "path": "URL 路径，默认 /",
+    "container": "可选。声明所属容器名，容器未运行时卡片置灰；省略则只看端口",
+    "tokenFile": "可选。容器内令牌文件路径，如 /data/plugins/foo-token",
+    "tokenQuery": "可选。令牌的 query 参数名，默认 token",
+    "tokenHeader": "预留。若某插件要求请求头而非 query 参数，在此登记头名；当前版本仅记录不发送"
+  },
+  "plugins": [
+    {
+      "id": "example_plugin",
+      "name": "示例插件",
+      "desc": "接入说明见 docs/plugins.md，删除本项后重启面板即生效",
+      "port": 19090,
+      "path": "/",
+      "container": null,
+      "tokenFile": null,
+      "tokenQuery": "token"
+    }
+  ]
+}

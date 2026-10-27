@@ -1,6 +1,6 @@
 # 大肥鱼管理面板
 
-本机网页面板：跳转三个控制台、查看运行状态、执行固定启停动作。
+本机网页面板：跳转各控制台、查看运行状态、执行固定启停动作。浅色主题。
 
 ## 启动
 
@@ -15,6 +15,7 @@
 | 功能 | 说明 |
 | --- | --- |
 | 控制台入口 | 桥接 13100、DSH 18080、SnowLuma 16082，以及扫码 noVNC 16081，均新标签页打开 |
+| 插件入口 | 其它插件 WebUI 通过 `plugins.json` 登记后出现在此，免改代码 |
 | 状态展示 | Docker daemon、两个容器、DSH 响应、桥接就绪、QQ 登录 |
 | 启动机器人 | 必要时拉起 Docker Desktop → 等 daemon → 启动 snowluma → 启动 fish-bot |
 | 停止 AI 服务 | 只停 fish-bot，保留 snowluma 与 QQ 进程 |
@@ -107,16 +108,30 @@ noVNC 会把密码记进浏览器 localStorage，之后重新打开该页面会�
 
 ```
 management-panel/
-├─ server.py          本机服务、状态探测、固定动作、任务管理
-├─ static/            页面、样式、前端脚本
+├─ server.py          本机服务、状态探测、固定动作、任务管理、插件接入
+├─ plugins.json       外部插件登记表（可入库，不含令牌）
+├─ static/            页面、样式、前端脚本（浅色主题）
 ├─ start.bat          双击启动（GBK 编码，见下）
 ├─ README.md
 ├─ docs/roadmap.md    性格 / 记忆 / 心情的后续设计备忘
+├─ docs/plugins.md    插件接入说明
 └─ runtime/           本地运行数据（Git 忽略）：会话密钥、面板日志
 ```
 
 > `start.bat` 必须保存为 **GBK/ANSI 编码**：cmd.exe 按系统代码页解析批处理，UTF-8 中文会让脚本解析错乱。
 > `.gitattributes` 已标记 `start.bat -text`，防止 Git 转换损坏。修改该文件时请保持编码。
+
+## 接入其它插件
+
+编辑 `plugins.json` 加一项，重启面板即可：
+
+```json
+{ "id": "my_plugin", "name": "我的插件", "desc": "说明", "port": 19500, "path": "/" }
+```
+
+需要令牌时用 `tokenFile` 指向容器内文件，后端每次点击即时读取；令牌不写入配置文件、不进前端缓存。详见 `docs/plugins.md`。
+
+**安全约束**：只接受 `127.0.0.1` 的整数端口，配置里无法填外部域名；`id` 必须在注册表里，未登记返回 409。
 
 ## 后续规划
 
